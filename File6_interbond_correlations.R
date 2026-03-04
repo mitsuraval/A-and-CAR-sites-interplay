@@ -1,260 +1,167 @@
-
-###########
-#corelations
-
-# ─── 0. INSTALL & LOAD Hmisc ────────────────────────────────────────────────────
-if (!requireNamespace("Hmisc", quietly = TRUE)) install.packages("Hmisc")
-library(Hmisc)
-library(tidyverse)
-
-# ─── 1. BUILD YOUR WIDE MATRIX ───────────────────────────────────────────────────
-wide_mat <- pca_input %>% 
-  select(-structure_id) %>%
-  as.matrix()
-
-# ─── 2. GET CORRELATIONS + P-VALUES ─────────────────────────────────────────────
-rc    <- rcorr(wide_mat, type = "pearson")
-r_mat <- rc$r
-p_mat <- rc$P
-
-# ─── 3. MELT INTO A TIDY DF & KEEP UPPER TRIANGLE ───────────────────────────────
-corr_df <- as_tibble(r_mat, rownames = "bond1") %>%
-  pivot_longer(-bond1, names_to = "bond2", values_to = "r") %>%
-  mutate(
-    i       = match(bond1, colnames(r_mat)),
-    j       = match(bond2, colnames(r_mat)),
-    p_value = p_mat[cbind(i, j)]
-  ) %>%
-  filter(i < j) %>%
-  arrange(desc(abs(r)))
-
-# ─── 4. FORMAT p_value WITH 12 SIGNIFICANT DIGITS ────────────────────────────────
-corr_df <- corr_df %>%
-  mutate(
-    p_value = formatC(
-      p_value,
-      format = "e",   # scientific notation
-      digits = 12     # twelve significant digits
-    )
-  )
-
-# ─── 5. VIEW THE TOP 15 PAIRS ────────────────────────────────────────────────────
-print(head(corr_df, 15))
-
-# after you have your corr_df as above...
-
-# 1) Save to disk as CSV
-readr::write_csv(corr_df, "bond_correlation_results.csv")
-
-# 2) (If you’re in RStudio) pop it up in the Viewer
-View(corr_df)
-
-library(dplyr)
-
-# 1) Define bond groups
-A_site    <- c("a","b","f","g","k","l","m","n","o","p","q")
-CAR_site  <- c("d","e","i","j","t","u","v","w","x","y","z")
-
-# 2) Filter for cross-site correlations AND p_value < 0.05
-cross_corr_df <- corr_df %>%
-  # if p_value is character, convert to numeric
-  mutate(p_value_num = as.numeric(p_value)) %>%
-  filter(
-    ((bond1 %in% A_site & bond2 %in% CAR_site) |
-       (bond2 %in% A_site & bond1 %in% CAR_site)) &
-      p_value_num < 0.05
-  ) %>%
-  # drop the helper column if you like
-  select(-p_value_num)
-
-# 3) Inspect the results
-print(cross_corr_df, n = 25)
+#!/usr/bin/env bash
+#SBATCH --job-name=make_correlation
+#SBATCH --output=out_make_correlation_%j.log
+#SBATCH --error=err_make_correlation_%j.log
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --partition=exx96
+#SBATCH --mem=7168M
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=mraval@wesleyan.edu
 
 
-# ─── 6. PIVOT FOR HEATMAP ─────────────────────────────────────────────────────────
-# first, tag each pair so we know which is A_site vs CAR_site
-cross_heatmap <- cross_corr_df %>%
-  mutate(
-    bondA = if_else(bond1 %in% A_site, bond1, bond2),
-    bondC = if_else(bond1 %in% CAR_site, bond1, bond2),
-    rnum  = as.numeric(r)
-  ) %>%
-  select(bondA, bondC, rnum)
-
-# ensure the proper ordering on each axis
-cross_heatmap <- cross_heatmap %>%
-  mutate(
-    bondA = factor(bondA, levels = A_site),
-    bondC = factor(bondC, levels = CAR_site)
-  )
-
-# ─── 7. PLOT HEATMAP ──────────────────────────────────────────────────────────────
-library(ggplot2)
-ggplot(cross_heatmap, aes(x = bondC, y = bondA, fill = rnum)) +
-  geom_tile(color = "grey90") +
-  scale_fill_gradient2(
-    low      = "steelblue",
-    mid      = "white",
-    high     = "darkred",
-    midpoint = 0,
-    limits   = c(-1, 1),
-    name     = expression(rho)
-  ) +
-  labs(
-    x     = "CAR-site bond",
-    y     = "A-site bond",
-    title = "Significant Cross-site Pearson Correlations"
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(
-    axis.text.x  = element_text(angle = 45, hjust = 1),
-    panel.grid   = element_blank(),
-    legend.title = element_text(size = 12),
-    legend.text  = element_text(size = 10)
-  )
-
-# ─── 8. (OPTIONAL) ANNOTATE WITH r-VALUES ─────────────────────────────────────────
-# if you want to print the numeric r inside each tile:
-ggplot(cross_heatmap, aes(x = bondC, y = bondA, fill = rnum)) +
-  geom_tile(color = "grey90") +
-  geom_text(aes(label = sprintf("%.2f", rnum)), size = 3, color = "black") +
-  scale_fill_gradient2(
-    low      = "steelblue",
-    mid      = "white",
-    high     = "darkred",
-    midpoint = 0,
-    limits   = c(-1, 1),
-    name     = expression(rho)
-  ) +
-  labs(
-    x     = "CAR-site bond",
-    y     = "A-site bond",
-    title = "Significant Cross-site Pearson Correlations"
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(
-    axis.text.x  = element_text(angle = 45, hjust = 1),
-    panel.grid   = element_blank(),
-    legend.title = element_text(size = 12),
-    legend.text  = element_text(size = 10)
-  )
-
-########
-
-# ─── ASSUMING YOU’VE ALREADY RUN STEPS 1–5 AND HAVE corr_df ────────────────
-# corr_df has columns bond1, bond2, r (string), p_value (string), plus the helpers i,j
-
-# 1) Define bond groups again
-A_site   <- c("a","b","f","g","k","l","m","n","o","p","q")
-CAR_site <- c("d","e","i","j","t","u","v","w","x","z")
-
-# 2) Select all cross-site pairs (no p-value filter)
-cross_all <- corr_df %>%
-  mutate(rnum = as.numeric(r)) %>%
-  filter(
-    (bond1 %in% A_site & bond2 %in% CAR_site) |
-      (bond2 %in% A_site & bond1 %in% CAR_site)
-  ) %>%
-  # identify which is the A-site vs the CAR-site bond
-  mutate(
-    bondA = if_else(bond1 %in% A_site, bond1, bond2),
-    bondC = if_else(bond1 %in% CAR_site, bond1, bond2)
-  ) %>%
-  select(bondA, bondC, rnum)
-
-# 3) Ensure proper factor ordering
-cross_all <- cross_all %>%
-  mutate(
-    bondA = factor(bondA, levels = A_site),
-    bondC = factor(bondC, levels = CAR_site)
-  )
-
-# ─── 4. PLOT THE FULL CROSS-SITE HEATMAP ────────────────────────────────────
-library(ggplot2)
-ggplot(cross_all, aes(x = bondC, y = bondA, fill = rnum)) +
-  geom_tile(color = "grey90") +
-  geom_text(
-    aes(label = sprintf("%.2f", rnum)),
-    size  = 3,
-    color = "black"
-  ) +
-  scale_fill_gradient2(
-    low      = "steelblue",
-    mid      = "white",
-    high     = "darkred",
-    midpoint = 0,
-    limits   = c(-1,1),
-    name     = expression(rho)
-  ) +
-  labs(
-    x     = "CAR-site bond",
-    y     = "A-site bond",
-    title = "All Cross-site Pearson Correlations"
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(
-    axis.text.x  = element_text(angle = 45, hjust = 1),
-    panel.grid   = element_blank(),
-    legend.title = element_text(size = 12),
-    legend.text  = element_text(size = 10)
-  )
+###
+# Collects binary stacking (distance cutoff) and H-bond (presence/absence) events from all NEUTRAL_* directories nested under the running directory
+# pools post-equilibration frames (>2000)
+# computes φ-correlation matrices with CSV and heatmap outputs in BASE_DIR
+# Expects input *_hbond.dat and *_stack.dat files with two columns (Frame, Value) located within NEUTRAL_*
+###
 
 
-##########
+# ─── 1. Set up Python environment ─────────────────────────────────────────
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate rnaenv
+module purge
+module load python/3.12.0
+echo "Using Python: $(which python3) $(python3 --version)"
 
-# ─── 0. INSTALL & LOAD LIBRARIES ─────────────────────────────────────────
-if (!requireNamespace("Hmisc", quietly = TRUE)) install.packages("Hmisc")
-library(Hmisc)
-library(tidyverse)
+# ─── 2. Define directories & expected files ───────────────────────────────
+BASE_DIR="/home66/mraval/tRNAmod/unmod"
+SKIP_LOG="$BASE_DIR/skipped_replicates.log"
+> "$SKIP_LOG"   # clear old log
 
-# ─── 1. BUILD YOUR WIDE MATRIX ─────────────────────────────────────────────
-wide_mat <- pca_input %>%
-  select(-structure_id) %>%    # drop metadata
-  as.matrix()
+STACK_KEYS=(a b c d e f g h i j)
+HBOND_KEYS=(k l m n o p q r s t u v w x y z)
+EXPECTED=()
+for c in "${STACK_KEYS[@]}"; do EXPECTED+=("${c}_stack.dat"); done
+for c in "${HBOND_KEYS[@]}"; do EXPECTED+=("${c}_hbond.dat"); done
 
-# ─── 2. GET CORRELATIONS ───────────────────────────────────────────────────
-rc    <- rcorr(wide_mat, type = "pearson")
-r_mat <- rc$r    # Pearson r
-# p_mat <- rc$P  # if you also want p‐values later
+VALID_DIRS=()
 
-# ─── 3. MELT THE FULL MATRIX INTO LONG FORMAT ──────────────────────────────
-corr_all <- as_tibble(r_mat, rownames = "bond1") %>%
-  pivot_longer(
-    -bond1,
-    names_to  = "bond2",
-    values_to = "r"
-  )
+# ─── 3. Find & validate each NEUTRAL_* directory ──────────────────────────
+while IFS= read -r subdir; do
+  echo "🔍 Checking: $subdir"
+  missing=()
+  for f in "${EXPECTED[@]}"; do
+    [[ -f "$subdir/$f" ]] || missing+=("$f")
+  done
 
-# ─── 4. PRESERVE BOND ORDER (OPTIONAL) ─────────────────────────────────────
-bond_levels <- rownames(r_mat)
-corr_all <- corr_all %>%
-  mutate(
-    bond1 = factor(bond1, levels = bond_levels),
-    bond2 = factor(bond2, levels = rev(bond_levels))  # reverse so (1,1) is top‐left
-  )
+  if (( ${#missing[@]} )); then
+    echo "❌ Missing in $subdir:"
+    for m in "${missing[@]}"; do echo "   - $m"; done
+    echo "$subdir" >> "$SKIP_LOG"
+    echo "⚠️ Skipping $subdir."
+  else
+    echo "✅ Valid: $subdir"
+    VALID_DIRS+=("$subdir")
+  fi
+  echo "--------------------------------------------"
+done < <(find "$BASE_DIR" -type d -name "NEUTRAL_*")
 
-# ─── 5. PLOT THE HEATMAP WITH OVERLAID r VALUES ────────────────────────────
-ggplot(corr_all, aes(x = bond2, y = bond1, fill = r)) +
-  geom_tile(color = "grey90") +
-  geom_text(aes(label = sprintf("%.2f", r)), size = 3) +
-  scale_fill_gradient2(
-    low      = "steelblue",
-    mid      = "white",
-    high     = "darkred",
-    midpoint = 0,
-    limits   = c(-1, 1),
-    name     = "Pearson r"
-  ) +
-  labs(
-    title = "Correlation Matrix of All Bonds",
-    x     = "Bond 2",
-    y     = "Bond 1"
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    panel.grid  = element_blank()
-  )
+# ─── 4. Define stacking cutoffs ───────────────────────────────────────────
+CUTOFFS=(4.5)
 
+# ─── 5. Create Python script ───────────────────────────────────────────────
+PY="$BASE_DIR/make_phi_correlations.py"
+cat > "$PY" << 'PYCODE'
+#!/usr/bin/env python3
+"""
+Compute φ‐coefficient matrices (full & cross‐site) for multiple stack cutoffs.
+"""
+import sys, os, glob
+import pandas as pd, numpy as np, matplotlib.pyplot as plt
 
-#######
+# read cutoff and directories
+cutoff = float(sys.argv[1])
+dirs = sys.argv[2:]
+# base output folder
+base = "/home66/mraval/tRNAmod/correlations"
+
+# 1) Load & tag
+records = []
+for d in dirs:
+    for fp in glob.glob(os.path.join(d, '*_stack.dat')) + glob.glob(os.path.join(d, '*_hbond.dat')):
+        name = os.path.basename(fp)
+        bond = name.split('_',1)[0]
+        dtype = 'stack' if '_stack' in name else 'hbond'
+        df = pd.read_csv(fp, sep=r'\s+', comment='#', header=None, names=['Frame','Value'])
+        df = df[df.Frame > 2000]
+        if dtype == 'stack':
+            df.Value = (df.Value <= cutoff).astype(int)
+        else:
+            df.Value = (df.Value > 0).astype(int)
+        df['bond'] = bond
+        df['type'] = dtype
+        records.append(df)
+
+# 2) Pivot wide
+data = pd.concat(records, ignore_index=True)
+wide = data.pivot_table(index='Frame', columns=['bond','type'], values='Value')
+wide.columns = [f"{b}_{t}" for b,t in wide.columns]
+
+# 3) Full φ‐matrix
+phi = wide.corr(method='pearson')
+out_full_csv = os.path.join(base, f'all_phi_corr_cut{cutoff}.csv')
+out_full_png = os.path.join(base, f'phi_heatmap_cut{cutoff}.png')
+phi.to_csv(out_full_csv)
+print(f"Saved full φ‐matrix: {out_full_csv}")
+fig, ax = plt.subplots(figsize=(12,10))
+im = ax.imshow(phi.values, cmap='bwr', vmin=-1, vmax=1, aspect='equal')
+labels = [c.split('_')[0] for c in phi.columns]
+ax.set_xticks(np.arange(len(labels))); ax.set_yticks(np.arange(len(labels)))
+ax.set_xticklabels(labels, rotation=90, fontsize=6)
+ax.set_yticklabels(labels, fontsize=6)
+cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+cbar.set_label('φ‐coefficient', rotation=270, labelpad=15)
+ax.set_title(f'Full φ‐heatmap (cutoff {cutoff} Å)', pad=10)
+plt.tight_layout()
+fig.savefig(out_full_png, dpi=300)
+print(f"Saved full heatmap: {out_full_png}")
+
+# 4) Cross‐site submatrix
+A_site = ["a","b","f","g","k","l","m","n","o","p","q"]
+CAR_site = ["d","e","i","j","t","u","v","w","x","y","z"]
+cl = phi.stack().reset_index(name='rho')
+cl.columns = ['full1','full2','rho']
+cl['bond1'] = cl.full1.str.split('_').str[0]
+cl['bond2'] = cl.full2.str.split('_').str[0]
+mask = cl.bond1.isin(A_site) & cl.bond2.isin(CAR_site)
+cs = cl.loc[mask]
+cs_mat = cs.pivot(index='bond1', columns='bond2', values='rho')
+cs_mat = cs_mat.reindex(index=A_site, columns=CAR_site)
+out_cross_csv = os.path.join(base, f'cross_phi_corr_cut{cutoff}.csv')
+out_cross_png = os.path.join(base, f'cross_phi_heatmap_cut{cutoff}.png')
+cs_mat.to_csv(out_cross_csv)
+print(f"Saved cross‐site CSV: {out_cross_csv}")
+fig2, ax2 = plt.subplots(figsize=(8,6))
+im2 = ax2.imshow(cs_mat.values, cmap='bwr', vmin=-1, vmax=1, aspect='equal')
+ax2.set_xticks(np.arange(len(CAR_site))); ax2.set_yticks(np.arange(len(A_site)))
+ax2.set_xticklabels(CAR_site, rotation=45, ha='right')
+ax2.set_yticklabels(A_site)
+for i,a in enumerate(A_site):
+    for j,c in enumerate(CAR_site):
+        v = cs_mat.loc[a,c]
+        if pd.notna(v): ax2.text(j,i,f"{v:.2f}",ha='center',va='center',fontsize=8)
+cbar2 = fig2.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+cbar2.set_label('φ‐coefficient', rotation=270, labelpad=15)
+ax2.set_title(f'Cross φ‐heatmap (cutoff {cutoff} Å)', pad=10)
+plt.tight_layout()
+fig2.savefig(out_cross_png, dpi=300)
+print(f"Saved cross‐heatmap: {out_cross_png}")
+PYCODE
+
+chmod +x "$PY"
+
+# ─── 6. Run for each cutoff ────────────────────────────────────────────────
+echo "📊 Running φ‐correlation for cutoffs: ${CUTOFFS[*]}"
+for cut in "${CUTOFFS[@]}"; do
+  python3 "$PY" "$cut" "${VALID_DIRS[@]}"
+done
+
+# ─── 7. Summary ───────────────────────────────────────────────────────────
+if [[ -s "$SKIP_LOG" ]]; then
+  echo "⚠️ Some dirs skipped (see $SKIP_LOG)"
+else
+  echo "✅ All processed with φ‐coefficient for all cutoffs!"
+fi
