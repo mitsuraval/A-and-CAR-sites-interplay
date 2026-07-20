@@ -1,4 +1,5 @@
 # This script writes the cpptraj input scripts for out hydrogen bond analysis
+#This code is modified from the code published by Dalgarno et al. (2022)
 
 #################
 # JOB VARIABLES #
